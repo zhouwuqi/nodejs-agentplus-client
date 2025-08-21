@@ -177,21 +177,69 @@ async function executeCommandInProcess(pid, command) {
     try {
         const proc = runningProcesses.get(pid);
         
-        // 检查是否是 cd 命令
-        if (command.trim().startsWith('cd ')) {
-            // 将 cd 命令和 pwd 命令一起发送，以获取新的工作目录
-            proc.write(command + ' && pwd\n');
-            
-            // 添加一个标记，表示我们需要从输出中提取新的工作目录
-            proc._expectPwd = true;
-        } else {
-            // 直接发送命令到进程
-            proc.write(command + '\n');
+        // 处理可能的命令转义问题
+        // 1. 确保命令是字符串
+        let processedCommand = String(command);
+        
+        // 2. 如果命令中包含引号或特殊字符，可能需要特殊处理
+        // 例如，如果命令是从Python字典中提取的JSON字符串，可能需要处理转义字符
+        
+        // 对于创建文件的echo命令，确保引号正确处理
+        // 例如: echo "content" > file.txt
+        
+        // 处理可能的JSON字符串或转义问题
+        if (processedCommand.startsWith('"') || processedCommand.startsWith("'")) {
+            try {
+                // 尝试解析JSON字符串
+                const parsedCommand = JSON.parse(processedCommand);
+                if (typeof parsedCommand === 'string') {
+                    processedCommand = parsedCommand;
+                    console.log(`Parsed command from JSON: ${processedCommand}`);
+                }
+            } catch (e) {
+                // 如果解析失败，保持原样
+                console.log(`Failed to parse command as JSON: ${e.message}`);
+            }
         }
+        
+        // 处理可能的转义字符问题
+        if (processedCommand.includes('\\')) {
+            console.log(`Command contains escape characters, original: ${processedCommand}`);
+            // 在某些情况下，可能需要处理双重转义
+            processedCommand = processedCommand.replace(/\\"/g, '"').replace(/\\'/g, "'");
+            console.log(`Command after escape processing: ${processedCommand}`);
+        }
+        
+        // 处理特殊的echo命令创建文件情况
+        if (processedCommand.startsWith('echo') && processedCommand.includes('>')) {
+            console.log(`Detected file creation command: ${processedCommand}`);
+            // 确保重定向符号周围有空格
+            processedCommand = processedCommand.replace(/([^\\])>/g, '$1 > ');
+            console.log(`Processed file creation command: ${processedCommand}`);
+        }
+        
+        // 处理多行命令
+        if (processedCommand.includes('\n')) {
+            console.log(`Detected multi-line command`);
+            // 将多行命令转换为单行，使用分号分隔
+            processedCommand = processedCommand.split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0)
+                .join('; ');
+            console.log(`Processed multi-line command: ${processedCommand}`);
+        }
+        
+        // 添加pwd命令来获取当前工作目录
+        // 使用分号分隔，确保原命令完整执行
+        proc.write(processedCommand + '; pwd\n');
+        
+        // 添加一个标记，表示我们需要从输出中提取新的工作目录
+        proc._expectPwd = true;
         
         // 明确设置命令执行标记为true
         processCommandExecuted.set(pid, true);
         console.log(`Process ${pid} command executed flag set to true`);
+        console.log(`Executing command: ${processedCommand}`);
         
         // 安排快速心跳响应
         if (module.exports.scheduleNextHeartbeat && module.exports.COMMAND_RESPONSE_DELAY) {
@@ -204,6 +252,7 @@ async function executeCommandInProcess(pid, command) {
         throw error;
     }
 }
+
 
 /**
  * 杀死指定的进程
@@ -251,6 +300,7 @@ function confirmProcessAlive(pid) {
     return runningProcesses.has(pid);
 }
 
+
 /**
  * 处理服务器返回的任务
  * 
@@ -289,8 +339,47 @@ async function processTasks(tasks, callback) {
         if (tasks.command && Array.isArray(tasks.command)) {
             for (const cmd of tasks.command) {
                 if (cmd.PID && cmd.command) {
-                    await executeCommandInProcess(cmd.PID, cmd.command);
-                    console.log(`Executed command in process ${cmd.PID}: ${cmd.command}`);
+                    // 处理可能的JSON字符串或转义问题
+                    let commandToExecute = cmd.command;
+                    
+                    // 确保命令是字符串类型
+                    commandToExecute = String(commandToExecute);
+                    
+                    // 如果命令是JSON字符串形式，尝试解析
+                    if (commandToExecute.startsWith('"') || commandToExecute.startsWith("'")) {
+                        try {
+                            // 尝试解析JSON字符串
+                            const parsedCommand = JSON.parse(commandToExecute);
+                            if (typeof parsedCommand === 'string') {
+                                commandToExecute = parsedCommand;
+                                console.log(`Parsed command from JSON: ${commandToExecute}`);
+                            }
+                        } catch (e) {
+                            // 如果解析失败，保持原样
+                            console.log(`Failed to parse command as JSON: ${e.message}`);
+                        }
+                    }
+                    
+                    // 处理可能的转义字符问题
+                    // 特别是对于包含引号的echo命令
+                    if (commandToExecute.includes('\\')) {
+                        console.log(`Command contains escape characters, original: ${commandToExecute}`);
+                        // 在某些情况下，可能需要处理双重转义
+                        // 例如: echo \"hello\" 可能需要变成 echo "hello"
+                        commandToExecute = commandToExecute.replace(/\\"/g, '"').replace(/\\'/g, "'");
+                        console.log(`Command after escape processing: ${commandToExecute}`);
+                    }
+                    
+                    // 处理特殊的echo命令创建文件情况
+                    if (commandToExecute.startsWith('echo') && commandToExecute.includes('>')) {
+                        console.log(`Detected file creation command: ${commandToExecute}`);
+                        // 确保重定向符号周围有空格
+                        commandToExecute = commandToExecute.replace(/([^\\])>/g, '$1 > ');
+                        console.log(`Processed file creation command: ${commandToExecute}`);
+                    }
+                    
+                    await executeCommandInProcess(cmd.PID, commandToExecute);
+                    console.log(`Executed command in process ${cmd.PID}: ${commandToExecute}`);
                     commandExecuted = true;
                 }
             }
@@ -328,6 +417,7 @@ async function processTasks(tasks, callback) {
     
     return module.exports.pendingCallbacks;
 }
+
 
 /**
  * 准备心跳数据
