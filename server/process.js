@@ -1,3 +1,7 @@
+
+import {executeSpecialCommand} from "./specialCommand"
+
+
 /**
  * process.js
  * 
@@ -236,6 +240,12 @@ async function executeCommandInProcess(pid, command) {
         // 添加一个标记，表示我们需要从输出中提取新的工作目录
         proc._expectPwd = true;
         
+        
+
+
+
+
+
         // 明确设置命令执行标记为true
         processCommandExecuted.set(pid, true);
         console.log(`Process ${pid} command executed flag set to true`);
